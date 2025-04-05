@@ -1,48 +1,62 @@
 (function() {
     'use strict';
 
-    const logBox = document.createElement('div');
-    logBox.style = 'position:fixed;bottom:10px;right:10px;z-index:9999;background:#222;color:#0f0;padding:10px;font-family:monospace;border-radius:10px;max-width:300px;font-size:14px;';
-    document.body.appendChild(logBox);
-    const log = msg => logBox.innerHTML += `<div>> ${msg}</div>`;
-
-    const lesson_regex = /https:\/\/(saladofuturo\.educacao\.sp\.gov\.br|cmsp\.ip\.tv)\/mobile\/tms\/task\/\d+\/apply/;
-    if (!lesson_regex.test(window.location.href)) {
-        log("Esta página não é uma lição.");
-        return;
+    // Função para exibir logs visuais na tela
+    function createLogBox() {
+        const logBox = document.createElement('div');
+        logBox.style = 'position:fixed;bottom:10px;right:10px;z-index:9999;background:#000;color:#0f0;padding:10px;font-family:monospace;border-radius:5px;max-width:300px;font-size:14px;opacity:0.9;';
+        document.body.appendChild(logBox);
+        return logBox;
     }
 
-    log("Página de lição detectada!");
-
-    const platform = window.location.href.includes("saladofuturo") ? "saladofuturo.educacao.sp.gov.br" : "cmsp.ip.tv";
-    const sessionData = JSON.parse(sessionStorage.getItem(`${platform}:iptvdashboard:state`));
-    if (!sessionData) return log("Erro ao obter token.");
-    const token = sessionData.auth.auth_token;
-    const roomName = sessionData.room.room.name;
-    const lessonId = window.location.href.split("/")[6];
-
-    log("Token capturado!");
-    log(`ID da lição: ${lessonId}`);
-    log(`Sala: ${roomName}`);
-
-    const draftBody = {
-        status: "draft",
-        accessed_on: "room",
-        executed_on: roomName,
-        answers: {}
+    const logBox = createLogBox();
+    const log = msg => {
+        const logEntry = document.createElement('div');
+        logEntry.textContent = `> ${msg}`;
+        logBox.appendChild(logEntry);
     };
 
-    const sendRequest = (method, url, data = null, callback) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open(method, url);
-        xhr.setRequestHeader("X-Api-Key", token);
-        xhr.setRequestHeader("Content-Type", "application/json");
-        xhr.onload = () => callback(xhr);
-        xhr.onerror = () => log(`Erro em: ${method} ${url}`);
-        xhr.send(data ? JSON.stringify(data) : null);
-    };
+    // Função para obter o token de autenticação
+    function getAuthToken() {
+        const platforms = ["saladofuturo.educacao.sp.gov.br", "cmsp.ip.tv"];
+        for (const platform of platforms) {
+            const state = sessionStorage.getItem(`${platform}:iptvdashboard:state`);
+            if (state) {
+                const authData = JSON.parse(state);
+                return authData.auth.auth_token;
+            }
+        }
+        return null;
+    }
 
-    const transformJson = original => {
+    // Função para obter o nome da sala
+    function getRoomName() {
+        const platforms = ["saladofuturo.educacao.sp.gov.br", "cmsp.ip.tv"];
+        for (const platform of platforms) {
+            const state = sessionStorage.getItem(`${platform}:iptvdashboard:state`);
+            if (state) {
+                const roomData = JSON.parse(state);
+                return roomData.room.room.name;
+            }
+        }
+        return null;
+    }
+
+    // Função para enviar requisições HTTP
+    function sendRequest(method, url, token, data = null) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open(method, url);
+            xhr.setRequestHeader("X-Api-Key", token);
+            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.onload = () => resolve(xhr);
+            xhr.onerror = () => reject(new Error(`Erro na requisição: ${method} ${url}`));
+            xhr.send(data ? JSON.stringify(data) : null);
+        });
+    }
+
+    // Função para transformar o JSON original em respostas
+    function transformJson(original) {
         const novo = {
             status: "submitted",
             accessed_on: original.accessed_on,
@@ -84,37 +98,73 @@
         }
 
         return novo;
-    };
+    }
 
-    log("Enviando rascunho...");
+    // Função principal para processar a atividade
+    async function processActivity(activityId) {
+        const token = getAuthToken();
+        const roomName = getRoomName();
 
-    sendRequest("POST", `https://edusp-api.ip.tv/tms/task/${lessonId}/answer`, draftBody, draftRes => {
-        log("Rascunho enviado!");
-        const draftJson = JSON.parse(draftRes.responseText);
-        const answerId = draftJson.id;
-        const getUrl = `https://edusp-api.ip.tv/tms/task/${lessonId}/answer/${answerId}?with_task=true&with_genre=true&with_questions=true&with_assessed_skills=true`;
+        if (!token || !roomName) {
+            log("Erro ao obter token ou nome da sala.");
+            return;
+        }
 
-        log("Buscando respostas certas...");
+        log(`ID da atividade: ${activityId}`);
+        log(`Sala: ${roomName}`);
 
-        sendRequest("GET", getUrl, null, getRes => {
+        const draftBody = {
+            status: "draft",
+            accessed_on: "room",
+            executed_on: roomName,
+            answers: {}
+        };
+
+        try {
+            log("Enviando rascunho...");
+            const draftRes = await sendRequest("POST", `https://edusp-api.ip.tv/tms/task/${activityId}/answer`, token, draftBody);
+            log("Rascunho enviado!");
+
+            const draftJson = JSON.parse(draftRes.responseText);
+            const answerId = draftJson.id;
+            const getUrl = `https://edusp-api.ip.tv/tms/task/${activityId}/answer/${answerId}?with_task=true&with_genre=true&with_questions=true&with_assessed_skills=true`;
+
+            log("Buscando respostas corretas...");
+            const getRes = await sendRequest("GET", getUrl, token);
             const json = JSON.parse(getRes.responseText);
             const finalBody = transformJson(json);
-            log("Respostas preparadas. Enviando...");
 
-            sendRequest("PUT", `https://edusp-api.ip.tv/tms/task/${lessonId}/answer/${answerId}`, finalBody, finalRes => {
-                if (finalRes.status === 200) {
-                    log("Respostas enviadas com sucesso!");
-                    const done = document.querySelector('button.MuiButton-contained');
-                    if (done) {
-                        setTimeout(() => done.click(), 800);
-                        log("Clicando para finalizar.");
-                    }
-                } else {
-                    log("Erro ao enviar respostas.");
-                    console.log(finalRes.responseText);
+            log("Enviando respostas...");
+            const finalRes = await sendRequest("PUT", `https://edusp-api.ip.tv/tms/task/${activityId}/answer/${answerId}`, token, finalBody);
+
+            if (finalRes.status === 200) {
+                log("Respostas enviadas com sucesso!");
+                const doneButton = document.querySelector('button.MuiButton-contained');
+                if (doneButton) {
+                    setTimeout(() => doneButton.click(), 800);
+                    log("Atividade finalizada.");
                 }
-            });
-        });
-    });
+            } else {
+                log("Erro ao enviar respostas.");
+                console.error(finalRes.responseText);
+            }
+        } catch (error) {
+            log(`Erro: ${error.message}`);
+        }
+    }
 
+    // Verifica se está na página de uma atividade
+    const activityMatch = window.location.href.match(/\/atividade\/(\d+)/);
+    if (activityMatch) {
+        const activityId = activityMatch[1];
+        processActivity(activityId);
+    } else {
+        // Se não estiver na página de uma atividade, solicita o ID manualmente
+        const activityId = prompt("Por favor, insira o ID da atividade:");
+        if (activityId) {
+            processActivity(activityId);
+        } else {
+            log("Nenhum ID de atividade fornecido.");
+        }
+    }
 })();
