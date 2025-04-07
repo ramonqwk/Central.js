@@ -1,178 +1,201 @@
 (function () {
     'use strict';
 
-    if (window.__scriptJaRodou) return;
-    window.__scriptJaRodou = true;
+    if (window._scriptRodandoSalaFuturo) return;
+    window._scriptRodandoSalaFuturo = true;
+
+    const formatTime = () => new Date().toLocaleTimeString('pt-BR', { hour12: false });
 
     const logBox = document.createElement('div');
+    logBox.id = 'logSalaFuturo';
     logBox.style = `
         position: fixed;
         bottom: 10px;
         right: 10px;
-        z-index: 9999;
-        background: #111;
+        z-index: 99999;
+        background: #000;
         color: #0f0;
         padding: 10px;
         font-family: monospace;
-        border-radius: 10px;
-        max-width: 320px;
+        border-radius: 12px;
+        max-width: 350px;
         max-height: 60vh;
         overflow-y: auto;
         font-size: 13px;
-        box-shadow: 0 0 10px #0f0;
+        box-shadow: 0 0 15px #0f0;
     `;
     document.body.appendChild(logBox);
 
     const log = (msg, isError = false) => {
         const line = document.createElement("div");
-        const time = new Date().toLocaleTimeString();
-        line.textContent = `${isError ? "[ERRO]" : ">>"} [${time}] ${msg}`;
-        line.style.color = isError ? "#f33" : "#0f0";
+        const prefix = `[${formatTime()}] `;
+        line.textContent = prefix + (isError ? `[ERRO] ${msg}` : `>> ${msg}`);
+        line.style.color = isError ? "#f55" : "#0f0";
         logBox.appendChild(line);
         logBox.scrollTop = logBox.scrollHeight;
     };
 
-    const isLicao = () => {
-        const urlOk = /\/tms\/task\/\d+\/apply/.test(location.href);
-        const temToken = sessionStorage.getItem('saladofuturo.educacao.sp.gov.br:iptvdashboard:state') || sessionStorage.getItem('cmsp.ip.tv:iptvdashboard:state');
-        const temElemento = document.querySelector('.MuiTypography-root, [class*=task-title], [class*=MuiPaper-root]');
-        return urlOk || (temToken && temElemento);
+    const forcarBtn = document.createElement('button');
+    forcarBtn.textContent = 'Forçar Execução';
+    forcarBtn.style = `
+        margin-top: 8px;
+        background: #222;
+        color: #0f0;
+        border: 1px solid #0f0;
+        border-radius: 6px;
+        cursor: pointer;
+        padding: 5px;
+        font-weight: bold;
+    `;
+    forcarBtn.onclick = () => {
+        log("Execução forçada pelo usuário.");
+        iniciarExecucao(true);
+    };
+    logBox.appendChild(forcarBtn);
+
+    const aguardarPagina = () => {
+        if (document.readyState !== "complete") {
+            setTimeout(aguardarPagina, 300);
+        } else {
+            iniciarExecucao(false);
+        }
     };
 
-    const addBotaoForcar = () => {
-        const btn = document.createElement('button');
-        btn.textContent = "▶ Forçar Execução";
-        btn.style = `
-            position: fixed;
-            bottom: 80px;
-            right: 10px;
-            z-index: 10000;
-            padding: 10px;
-            background: #222;
-            color: #0f0;
-            border: 2px solid #0f0;
-            border-radius: 8px;
-            cursor: pointer;
-        `;
-        btn.onclick = () => {
-            log("Execução forçada pelo usuário.");
-            iniciar();
-        };
-        document.body.appendChild(btn);
-    };
+    const iniciarExecucao = (forcar = false) => {
+        const url = window.location.href;
+        const isLicao = url.includes("/task/") && url.includes("/apply");
+        if (!isLicao && !forcar) {
+            log("Você não está numa lição. Acesse a página de uma lição e clique em 'Forçar Execução' se necessário.", true);
+            return;
+        }
 
-    if (!isLicao()) {
-        log("Você não está numa lição. Acesse a página de uma lição e clique em 'Forçar Execução' se necessário.", true);
-        addBotaoForcar();
-        return;
-    }
+        const plataforma = url.includes("saladofuturo") ? "saladofuturo.educacao.sp.gov.br" : "cmsp.ip.tv";
+        const estadoSessao = sessionStorage.getItem(`${plataforma}:iptvdashboard:state`);
+        if (!estadoSessao) {
+            log("Token de sessão não encontrado!", true);
+            return;
+        }
 
-    iniciar();
-
-    function iniciar() {
+        let sessionData;
         try {
-            const plataforma = location.href.includes("saladofuturo") ? "saladofuturo.educacao.sp.gov.br" : "cmsp.ip.tv";
-            const sessionData = JSON.parse(sessionStorage.getItem(`${plataforma}:iptvdashboard:state`));
-            if (!sessionData || !sessionData.auth?.auth_token) return log("Token de sessão não encontrado!", true);
+            sessionData = JSON.parse(estadoSessao);
+        } catch (e) {
+            log("Erro ao analisar dados da sessão!", true);
+            return;
+        }
 
-            const token = sessionData.auth.auth_token;
-            const roomName = sessionData.room?.room?.name || "Desconhecida";
-            const lessonId = location.href.match(/task\/(\d+)/)?.[1];
-            if (!lessonId) return log("ID da lição não encontrado!", true);
+        const token = sessionData?.auth?.auth_token;
+        const room = sessionData?.room?.room?.name;
+        const lessonId = url.split("/").find(x => /^\d+$/.test(x));
 
-            log("Sessão validada!");
-            log(`Sala: ${roomName}`);
-            log(`Lição ID: ${lessonId}`);
+        if (!token || !room || !lessonId) {
+            log("Informações essenciais ausentes (token, sala ou ID da lição).", true);
+            return;
+        }
 
-            const draftBody = {
-                status: "draft",
-                accessed_on: "room",
-                executed_on: roomName,
+        log(`Token detectado.`);
+        log(`Sala: ${room}`);
+        log(`ID da lição: ${lessonId}`);
+
+        const draftBody = {
+            status: "draft",
+            accessed_on: "room",
+            executed_on: room,
+            answers: {}
+        };
+
+        const enviarReq = (method, url, data = null, callback) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open(method, url);
+            xhr.setRequestHeader("X-Api-Key", token);
+            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.onload = () => callback(xhr);
+            xhr.onerror = () => log(`Erro de rede em ${method} ${url}`, true);
+            xhr.send(data ? JSON.stringify(data) : null);
+        };
+
+        const montarFinalBody = json => {
+            const novo = {
+                status: "submitted",
+                accessed_on: json.accessed_on,
+                executed_on: json.executed_on,
                 answers: {}
             };
 
-            const sendRequest = (method, url, data, callback) => {
-                const xhr = new XMLHttpRequest();
-                xhr.open(method, url);
-                xhr.setRequestHeader("X-Api-Key", token);
-                xhr.setRequestHeader("Content-Type", "application/json");
-                xhr.onload = () => callback(xhr);
-                xhr.onerror = () => log(`Erro em ${method} ${url}`, true);
-                xhr.send(data ? JSON.stringify(data) : null);
-            };
+            for (const id in json.answers) {
+                const quest = json.answers[id];
+                const q = json.task.questions.find(q => q.id === parseInt(id));
+                if (!q) continue;
 
-            const transformar = original => {
-                const novo = {
-                    status: "submitted",
-                    accessed_on: original.accessed_on,
-                    executed_on: original.executed_on,
-                    answers: {}
-                };
-
-                for (const id in original.answers) {
-                    const quest = original.answers[id];
-                    const q = original.task.questions.find(q => q.id === parseInt(id));
-                    if (!q) continue;
-
-                    let resposta;
-                    try {
-                        switch (q.type) {
-                            case "order-sentences": resposta = q.options.sentences.map(s => s.value); break;
-                            case "fill-words": resposta = q.options.phrase.map((v, i) => i % 2 ? v.value : null).filter(Boolean); break;
-                            case "text_ai": resposta = { "0": q.comment.replace(/<\/?p>/g, '') }; break;
-                            case "fill-letters": resposta = q.options.answer; break;
-                            case "cloud": resposta = q.options.ids; break;
-                            default:
-                                resposta = Object.fromEntries(Object.entries(q.options).map(([k, v]) => [k, v.answer]));
-                        }
-                    } catch (err) {
-                        log(`Erro ao processar questão ${id}: ${err.message}`, true);
-                        continue;
+                let resposta;
+                try {
+                    switch (q.type) {
+                        case "order-sentences": resposta = q.options.sentences.map(s => s.value); break;
+                        case "fill-words": resposta = q.options.phrase.map((v, i) => i % 2 ? v.value : null).filter(Boolean); break;
+                        case "text_ai": resposta = { "0": q.comment.replace(/<\/?p>/g, '') }; break;
+                        case "fill-letters": resposta = q.options.answer; break;
+                        case "cloud": resposta = q.options.ids; break;
+                        default:
+                            resposta = Object.fromEntries(Object.keys(q.options).map(opt => [opt, q.options[opt].answer]));
                     }
-
-                    novo.answers[id] = {
-                        question_id: quest.question_id,
-                        question_type: q.type,
-                        answer: resposta
-                    };
+                } catch (e) {
+                    log(`Erro ao processar questão ${id}: ${e.message}`, true);
+                    continue;
                 }
 
-                return novo;
-            };
+                novo.answers[id] = {
+                    question_id: quest.question_id,
+                    question_type: q.type,
+                    answer: resposta
+                };
+            }
 
-            log("Enviando rascunho...");
-            sendRequest("POST", `https://edusp-api.ip.tv/tms/task/${lessonId}/answer`, draftBody, draftRes => {
-                if (draftRes.status !== 200) return log("Falha ao enviar rascunho.", true);
+            return novo;
+        };
 
-                log("Rascunho enviado!");
-                const answerId = JSON.parse(draftRes.responseText).id;
-                const getUrl = `https://edusp-api.ip.tv/tms/task/${lessonId}/answer/${answerId}?with_task=true&with_genre=true&with_questions=true&with_assessed_skills=true`;
+        log("Enviando rascunho...");
 
-                log("Buscando respostas certas...");
-                sendRequest("GET", getUrl, null, getRes => {
-                    if (getRes.status !== 200) return log("Erro ao buscar respostas.", true);
+        enviarReq("POST", `https://edusp-api.ip.tv/tms/task/${lessonId}/answer`, draftBody, draftRes => {
+            if (draftRes.status !== 200) {
+                log("Falha ao enviar rascunho.", true);
+                return;
+            }
 
-                    const json = JSON.parse(getRes.responseText);
-                    const finalBody = transformar(json);
+            log("Rascunho enviado com sucesso!");
 
-                    log("Respostas preparadas. Enviando...");
-                    sendRequest("PUT", `https://edusp-api.ip.tv/tms/task/${lessonId}/answer/${answerId}`, finalBody, finalRes => {
-                        if (finalRes.status === 200) {
-                            log("Respostas enviadas com sucesso!");
-                            const done = document.querySelector('button.MuiButton-contained');
-                            if (done) {
-                                setTimeout(() => done.click(), 800);
-                                log("Clicando para finalizar.");
-                            }
-                        } else {
-                            log("Erro ao enviar respostas finais.", true);
+            const draftJson = JSON.parse(draftRes.responseText);
+            const answerId = draftJson.id;
+            const getUrl = `https://edusp-api.ip.tv/tms/task/${lessonId}/answer/${answerId}?with_task=true&with_genre=true&with_questions=true&with_assessed_skills=true`;
+
+            log("Buscando respostas certas...");
+
+            enviarReq("GET", getUrl, null, getRes => {
+                if (getRes.status !== 200) {
+                    log("Erro ao buscar respostas completas.", true);
+                    return;
+                }
+
+                const json = JSON.parse(getRes.responseText);
+                const finalBody = montarFinalBody(json);
+
+                log("Respostas preparadas. Enviando...");
+
+                enviarReq("PUT", `https://edusp-api.ip.tv/tms/task/${lessonId}/answer/${answerId}`, finalBody, finalRes => {
+                    if (finalRes.status === 200) {
+                        log("Respostas enviadas com sucesso!");
+                        const btn = document.querySelector('button.MuiButton-contained');
+                        if (btn) {
+                            log("Clicando para finalizar a tarefa.");
+                            setTimeout(() => btn.click(), 1000);
                         }
-                    });
+                    } else {
+                        log("Erro ao enviar as respostas finais.", true);
+                        console.log(finalRes.responseText);
+                    }
                 });
             });
+        });
+    };
 
-        } catch (e) {
-            log("Erro inesperado: " + e.message, true);
-        }
-    }
+    aguardarPagina();
 })();
